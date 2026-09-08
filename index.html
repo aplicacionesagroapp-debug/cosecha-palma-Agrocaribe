@@ -167,11 +167,11 @@
             };
         }
 
-        // 4. Sincronización a través de Google Apps Script (Servidor a Servidor)
+        // 4. Sincronización a través de Google Apps Script (Transacción Corregida)
         async function sincronizarConKobo() {
-            const tx = db.transaction("registros", "readwrite");
-            const store = tx.objectStore("registros");
-            const req = store.getAll();
+            const txRead = db.transaction("registros", "readonly");
+            const storeRead = txRead.objectStore("registros");
+            const req = storeRead.getAll();
 
             req.onsuccess = async () => {
                 const pendientes = req.result.filter(r => !r.sincronizado);
@@ -192,7 +192,6 @@
                     };
 
                     try {
-                        // Se envía como text/plain para evitar que el navegador envíe peticiones preflight OPTIONS
                         const res = await fetch(GOOGLE_SCRIPT_URL, {
                             method: "POST",
                             headers: {
@@ -202,8 +201,11 @@
                         });
 
                         if (res.ok) {
+                            // Abrimos una transacción nueva y dedicada exclusivamente para actualizar este registro
+                            const txWrite = db.transaction("registros", "readwrite");
+                            const storeWrite = txWrite.objectStore("registros");
                             item.sincronizado = true;
-                            store.put(item);
+                            storeWrite.put(item);
                             enviados++;
                         } else {
                             console.error("Error devuelto por el servidor:", res.status);
