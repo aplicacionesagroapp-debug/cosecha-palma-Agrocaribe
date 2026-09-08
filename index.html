@@ -167,7 +167,7 @@
             };
         }
 
-        // 4. Sincronización con KoboToolbox mediante Proxy CORS
+        // 4. Sincronización con KoboToolbox mediante Proxy Gratuito Abierto (ThingProxy / AllOrigins)
         async function sincronizarConKobo() {
             const tx = db.transaction("registros", "readwrite");
             const store = tx.objectStore("registros");
@@ -181,8 +181,8 @@
                 }
 
                 let enviados = 0;
-                // Proxy para sobrepasar el bloqueo CORS del navegador
-                const proxyUrl = "https://corsproxy.io/?" + encodeURIComponent(KOBO_TARGET_URL);
+                // Uso de proxy gratuito sin restricción de API key
+                const proxyUrl = "https://thingproxy.freeboard.io/fetch/" + KOBO_TARGET_URL;
 
                 for (const item of pendientes) {
                     const koboPayload = {
