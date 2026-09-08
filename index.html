@@ -10,6 +10,7 @@
         button { padding: 15px 25px; font-size: 16px; border: none; border-radius: 8px; cursor: pointer; margin: 5px; }
         .btn-nfc { background-color: #27ae60; color: white; width: 100%; font-size: 18px; font-weight: bold; }
         .btn-sync { background-color: #2980b9; color: white; width: 100%; }
+        .btn-clear { background-color: #e74c3c; color: white; width: 100%; margin-top: 10px; }
         .status { margin-top: 15px; font-weight: bold; color: #555; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
@@ -17,8 +18,6 @@
     </style>
 </head>
 <body>
-    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
-    <script>eruda.init();</script>
 
     <h2>Control Cosecha de Palma</h2>
 
@@ -31,6 +30,7 @@
         <h3>Resumen Local (Hoy)</h3>
         <p>Total racimos registrados sin enviar: <span id="total-pendientes">0</span></p>
         <button class="btn-sync" onclick="sincronizarConKobo()">SINCRONIZAR DATOS CON KOBO</button>
+        <button class="btn-clear" onclick="limpiarRegistrosLocales()">LIMPIAR BASE DE DATOS LOCAL</button>
     </div>
 
     <div class="card">
@@ -47,12 +47,17 @@
         </table>
     </div>
 
+    <!-- Inspector de consola para móviles -->
+    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+    <script>eruda.init();</script>
+
     <script>
-        const ASSET_ID = "a3M8LTcupevyFqnTnLYgLv";
-        const KOBO_TOKEN = "a6e03ba3d149e0ca7f60fb55d2e5516ea0b85b07";
+        const KOBO_TARGET_URL = "https://eu.kobotoolbox.org/api/v2/assets/a3M8LTcupevyFqnTnLYgLv/submissions.json";
+        const KOBO_TOKEN = "Token a6e03ba3d149e0ca7f60fb55d2e5516ea0b85b07";
 
         let db;
 
+        // Inicializar IndexedDB
         const request = indexedDB.open("CosechaPalmaDB", 2);
         request.onupgradeneeded = e => {
             db = e.target.result;
@@ -65,6 +70,7 @@
             actualizarInterfaz();
         };
 
+        // 1. Lectura NFC
         async function iniciarEscaneoNFC() {
             const statusDiv = document.getElementById("status-nfc");
             if (!("NDEFReader" in window)) {
@@ -91,7 +97,7 @@
             }
         }
 
-        // 2. Captura de GPS con Timeout ampliado para alta precisión
+        // 2. Captura de GPS y Guardado Local
         function capturarUbicacionYGuardar(idCortero) {
             const options = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
 
@@ -101,8 +107,6 @@
                         id_cortero: idCortero,
                         latitud: pos.coords.latitude,
                         longitud: pos.coords.longitude,
-                        altitud: pos.coords.altitude || 0,
-                        precision: pos.coords.accuracy || 0,
                         cantidad: 1,
                         timestamp: new Date().toISOString(),
                         sincronizado: false
@@ -115,8 +119,6 @@
                         id_cortero: idCortero,
                         latitud: null,
                         longitud: null,
-                        altitud: 0,
-                        precision: 0,
                         cantidad: 1,
                         timestamp: new Date().toISOString(),
                         sincronizado: false
@@ -138,6 +140,7 @@
             };
         }
 
+        // 3. Resumen y Conteo en Pantalla
         function actualizarInterfaz() {
             const tx = db.transaction("registros", "readonly");
             const store = tx.objectStore("registros");
@@ -164,7 +167,7 @@
             };
         }
 
-        // 3. Sincronización mediante Endpoint XML Directo (Evita bloqueos CORS)
+        // 4. Sincronización con KoboToolbox mediante Proxy CORS
         async function sincronizarConKobo() {
             const tx = db.transaction("registros", "readwrite");
             const store = tx.objectStore("registros");
@@ -178,40 +181,34 @@
                 }
 
                 let enviados = 0;
-                const endpoint = `https://eu.kobotoolbox.org/submission?submission`;
+                // Proxy para sobrepasar el bloqueo CORS del navegador
+                const proxyUrl = "https://corsproxy.io/?" + encodeURIComponent(KOBO_TARGET_URL);
 
                 for (const item of pendientes) {
-                    const gpsString = item.latitud && item.longitud 
-                        ? `${item.latitud} ${item.longitud} ${item.altitud} ${item.precision}`
-                        : "";
-
-                    // Construcción del XML nativo que exige KoboToolbox
-                    const xmlData = `<?xml version="1.0"?>
-                    <a3M8LTcupevyFqnTnLYgLv id="a3M8LTcupevyFqnTnLYgLv">
-                        <ID_CORTERO>${item.id_cortero}</ID_CORTERO>
-                        <UBICACI_N_GPS_AUTOMATICA>${gpsString}</UBICACI_N_GPS_AUTOMATICA>
-                        <CONTADOR_DE_RACIMOS>${item.cantidad}</CONTADOR_DE_RACIMOS>
-                    </a3M8LTcupevyFqnTnLYgLv>`;
-
-                    const formData = new FormData();
-                    const blob = new Blob([xmlData], { type: "text/xml" });
-                    formData.append("xml_submission_file", blob, "submission.xml");
+                    const koboPayload = {
+                        "submission": {
+                            "ID_CORTERO": item.id_cortero,
+                            "UBICACI_N_GPS_AUTOMATICA": item.latitud && item.longitud ? `${item.latitud} ${item.longitud} 0 0` : null,
+                            "CONTADOR_DE_RACIMOS": item.cantidad
+                        }
+                    };
 
                     try {
-                        const res = await fetch(endpoint, {
+                        const res = await fetch(proxyUrl, {
                             method: "POST",
                             headers: {
-                                "Authorization": "Token " + KOBO_TOKEN
+                                "Content-Type": "application/json",
+                                "Authorization": KOBO_TOKEN
                             },
-                            body: formData
+                            body: JSON.stringify(koboPayload)
                         });
 
-                        if (res.status === 201 || res.status === 200) {
+                        if (res.ok || res.status === 201 || res.status === 200) {
                             item.sincronizado = true;
                             store.put(item);
                             enviados++;
                         } else {
-                            console.error("Error en respuesta Kobo:", res.status, await res.text());
+                            console.error("Error devuelto por Kobo:", res.status, await res.text());
                         }
                     } catch (e) {
                         console.error("Error de red al sincronizar:", e);
@@ -220,6 +217,19 @@
                 alert(`Resultado: Se sincronizaron ${enviados} de ${pendientes.length} registros con Kobo.`);
                 actualizarInterfaz();
             };
+        }
+
+        // 5. Función para Limpiar Registros Locales
+        function limpiarRegistrosLocales() {
+            if (confirm("¿Estás seguro de borrar todos los registros no enviados del teléfono?")) {
+                const tx = db.transaction("registros", "readwrite");
+                const store = tx.objectStore("registros");
+                const req = store.clear();
+                req.onsuccess = () => {
+                    alert("Base de datos local limpiada.");
+                    actualizarInterfaz();
+                };
+            }
         }
     </script>
 </body>
