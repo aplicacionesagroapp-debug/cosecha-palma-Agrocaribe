@@ -170,9 +170,8 @@
                     const koboPayload = {
                         "submission": {
                             "ID_CORTERO": item.id_cortero,
-                            "UBICACION_GPS": `${item.latitud} ${item.longitud} 0 0`,
-                            "CONTEO": item.cantidad,
-                            "FECHA_HORA": item.timestamp
+                            "UBICACI_N_GPS_AUTOMATICA": item.latitud && item.longitud ? `${item.latitud} ${item.longitud} 0 0` : null,
+                            "CONTADOR_DE_RACIMOS": item.cantidad
                         }
                     };
 
