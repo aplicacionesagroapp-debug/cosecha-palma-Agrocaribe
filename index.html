@@ -38,6 +38,7 @@
                 <tr>
                     <th>ID Cortero</th>
                     <th>Racimos</th>
+                    <th>GPS Capturado</th>
                 </tr>
             </thead>
             <tbody></tbody>
@@ -45,35 +46,34 @@
     </div>
 
     <script>
-        // CONFIGURACIÓN DE KOBO
-        const KOBO_ENDPOINT = "https://eu.kobotoolbox.org/api/v2/assets/a3M8LTcupevyFqnTnLYgLv/submissions.json";
-        const KOBO_TOKEN = "Token a6e03ba3d149e0ca7f60fb55d2e5516ea0b85b07";
+        const ASSET_ID = "a3M8LTcupevyFqnTnLYgLv";
+        const KOBO_TOKEN = "a6e03ba3d149e0ca7f60fb55d2e5516ea0b85b07";
 
         let db;
 
-        // Inicializar IndexedDB para guardar offline
-        const request = indexedDB.open("CosechaPalmaDB", 1);
+        const request = indexedDB.open("CosechaPalmaDB", 2);
         request.onupgradeneeded = e => {
             db = e.target.result;
-            db.createObjectStore("registros", { keyPath: "id", autoIncrement: true });
+            if(!db.objectStoreNames.contains("registros")) {
+                db.createObjectStore("registros", { keyPath: "id", autoIncrement: true });
+            }
         };
         request.onsuccess = e => {
             db = e.target.result;
             actualizarInterfaz();
         };
 
-        // 1. Lectura NFC
         async function iniciarEscaneoNFC() {
             const statusDiv = document.getElementById("status-nfc");
             if (!("NDEFReader" in window)) {
-                statusDiv.innerText = "Error: Este navegador o dispositivo no soporta lectura NFC.";
+                statusDiv.innerText = "Error: Navegador o dispositivo sin soporte NFC.";
                 return;
             }
 
             try {
                 const ndef = new NDEFReader();
                 await ndef.scan();
-                statusDiv.innerText = "Escaneando... Acerca la etiqueta del cortero.";
+                statusDiv.innerText = "Escaneando... Acerque la tarjeta NFC del cortero.";
 
                 ndef.onreading = event => {
                     const decoder = new TextDecoder();
@@ -81,7 +81,7 @@
                     for (const record of event.message.records) {
                         idCortero = decoder.decode(record.data);
                     }
-                    statusDiv.innerText = `Tag detectado: ${idCortero}. Capturando GPS...`;
+                    statusDiv.innerText = `Tag: ${idCortero}. Obteniendo GPS...`;
                     capturarUbicacionYGuardar(idCortero);
                 };
             } catch (error) {
@@ -89,14 +89,18 @@
             }
         }
 
-        // 2. Captura de GPS y Guardado Local
+        // 2. Captura de GPS con Timeout ampliado para alta precisión
         function capturarUbicacionYGuardar(idCortero) {
+            const options = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
+
             navigator.geolocation.getCurrentPosition(
                 pos => {
                     const registro = {
                         id_cortero: idCortero,
                         latitud: pos.coords.latitude,
                         longitud: pos.coords.longitude,
+                        altitud: pos.coords.altitude || 0,
+                        precision: pos.coords.accuracy || 0,
                         cantidad: 1,
                         timestamp: new Date().toISOString(),
                         sincronizado: false
@@ -104,18 +108,20 @@
                     guardarEnBDLocal(registro);
                 },
                 err => {
-                    // Si falla el GPS, guardar registro con ubicación nula
+                    console.warn("GPS no obtenido:", err.message);
                     const registro = {
                         id_cortero: idCortero,
                         latitud: null,
                         longitud: null,
+                        altitud: 0,
+                        precision: 0,
                         cantidad: 1,
                         timestamp: new Date().toISOString(),
                         sincronizado: false
                     };
                     guardarEnBDLocal(registro);
                 },
-                { enableHighAccuracy: true, timeout: 5000 }
+                options
             );
         }
 
@@ -124,12 +130,12 @@
             const store = tx.objectStore("registros");
             store.add(registro);
             tx.oncomplete = () => {
-                document.getElementById("status-nfc").innerText = `¡Registrado! Racimo contado para Cortero: ${registro.id_cortero}`;
+                const statusGps = registro.latitud ? "con GPS OK" : "SIN GPS";
+                document.getElementById("status-nfc").innerText = `¡Registrado! Cortero: ${registro.id_cortero} (${statusGps})`;
                 actualizarInterfaz();
             };
         }
 
-        // 3. Resumen y Conteo en Pantalla
         function actualizarInterfaz() {
             const tx = db.transaction("registros", "readonly");
             const store = tx.objectStore("registros");
@@ -141,18 +147,22 @@
 
                 const conteo = {};
                 registros.forEach(r => {
-                    conteo[r.id_cortero] = (conteo[r.id_cortero] || 0) + 1;
+                    if(!r.sincronizado) {
+                        if(!conteo[r.id_cortero]) conteo[r.id_cortero] = { total: 0, gpsOk: 0 };
+                        conteo[r.id_cortero].total += 1;
+                        if(r.latitud) conteo[r.id_cortero].gpsOk += 1;
+                    }
                 });
 
                 const tbody = document.querySelector("#tabla-resumen tbody");
                 tbody.innerHTML = "";
-                for (const [cortero, total] of Object.entries(conteo)) {
-                    tbody.innerHTML += `<tr><td>${cortero}</td><td>${total}</td></tr>`;
+                for (const [cortero, data] of Object.entries(conteo)) {
+                    tbody.innerHTML += `<tr><td>${cortero}</td><td>${data.total}</td><td>${data.gpsOk} / ${data.total}</td></tr>`;
                 }
             };
         }
 
-        // 4. Sincronización con KoboToolbox cuando hay Internet
+        // 3. Sincronización mediante Endpoint XML Directo (Evita bloqueos CORS)
         async function sincronizarConKobo() {
             const tx = db.transaction("registros", "readwrite");
             const store = tx.objectStore("registros");
@@ -166,35 +176,46 @@
                 }
 
                 let enviados = 0;
+                const endpoint = `https://eu.kobotoolbox.org/submission?submission`;
+
                 for (const item of pendientes) {
-                    const koboPayload = {
-                        "submission": {
-                            "ID_CORTERO": item.id_cortero,
-                            "UBICACI_N_GPS_AUTOMATICA": item.latitud && item.longitud ? `${item.latitud} ${item.longitud} 0 0` : null,
-                            "CONTADOR_DE_RACIMOS": item.cantidad
-                        }
-                    };
+                    const gpsString = item.latitud && item.longitud 
+                        ? `${item.latitud} ${item.longitud} ${item.altitud} ${item.precision}`
+                        : "";
+
+                    // Construcción del XML nativo que exige KoboToolbox
+                    const xmlData = `<?xml version="1.0"?>
+                    <a3M8LTcupevyFqnTnLYgLv id="a3M8LTcupevyFqnTnLYgLv">
+                        <ID_CORTERO>${item.id_cortero}</ID_CORTERO>
+                        <UBICACI_N_GPS_AUTOMATICA>${gpsString}</UBICACI_N_GPS_AUTOMATICA>
+                        <CONTADOR_DE_RACIMOS>${item.cantidad}</CONTADOR_DE_RACIMOS>
+                    </a3M8LTcupevyFqnTnLYgLv>`;
+
+                    const formData = new FormData();
+                    const blob = new Blob([xmlData], { type: "text/xml" });
+                    formData.append("xml_submission_file", blob, "submission.xml");
 
                     try {
-                        const res = await fetch(KOBO_ENDPOINT, {
+                        const res = await fetch(endpoint, {
                             method: "POST",
                             headers: {
-                                "Content-Type": "application/json",
-                                "Authorization": KOBO_TOKEN
+                                "Authorization": "Token " + KOBO_TOKEN
                             },
-                            body: JSON.stringify(koboPayload)
+                            body: formData
                         });
 
-                        if (res.ok) {
+                        if (res.status === 201 || res.status === 200) {
                             item.sincronizado = true;
                             store.put(item);
                             enviados++;
+                        } else {
+                            console.error("Error en respuesta Kobo:", res.status, await res.text());
                         }
                     } catch (e) {
-                        console.error("Fallo de red al enviar:", e);
+                        console.error("Error de red al sincronizar:", e);
                     }
                 }
-                alert(`Se sincronizaron ${enviados} de ${pendientes.length} registros con Kobo.`);
+                alert(`Resultado: Se sincronizaron ${enviados} de ${pendientes.length} registros con Kobo.`);
                 actualizarInterfaz();
             };
         }
