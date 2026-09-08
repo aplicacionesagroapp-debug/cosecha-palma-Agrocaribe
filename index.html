@@ -52,8 +52,8 @@
     <script>eruda.init();</script>
 
     <script>
-        const KOBO_TARGET_URL = "https://eu.kobotoolbox.org/api/v2/assets/a3M8LTcupevyFqnTnLYgLv/submissions.json";
-        const KOBO_TOKEN = "Token a6e03ba3d149e0ca7f60fb55d2e5516ea0b85b07";
+        // PEGA AQUÍ LA URL GENERADA EN GOOGLE APPS SCRIPT
+        const GOOGLE_SCRIPT_URL = https://script.google.com/macros/s/AKfycbyeQyjDKQL3MCgTknKqn4F3c3OFTu3YYkNPFF4TGOo_uUmpAMQyE1IiaQVB8pwIn3E/exec;
 
         let db;
 
@@ -167,7 +167,7 @@
             };
         }
 
-        // 4. Sincronización con KoboToolbox mediante Proxy Gratuito Abierto (ThingProxy / AllOrigins)
+        // 4. Sincronización a través de Google Apps Script (Servidor a Servidor)
         async function sincronizarConKobo() {
             const tx = db.transaction("registros", "readwrite");
             const store = tx.objectStore("registros");
@@ -181,8 +181,6 @@
                 }
 
                 let enviados = 0;
-                // Uso de proxy gratuito sin restricción de API key
-                const proxyUrl = "https://thingproxy.freeboard.io/fetch/" + KOBO_TARGET_URL;
 
                 for (const item of pendientes) {
                     const koboPayload = {
@@ -194,21 +192,21 @@
                     };
 
                     try {
-                        const res = await fetch(proxyUrl, {
+                        // Se envía como text/plain para evitar que el navegador envíe peticiones preflight OPTIONS
+                        const res = await fetch(GOOGLE_SCRIPT_URL, {
                             method: "POST",
                             headers: {
-                                "Content-Type": "application/json",
-                                "Authorization": KOBO_TOKEN
+                                "Content-Type": "text/plain;charset=utf-8"
                             },
                             body: JSON.stringify(koboPayload)
                         });
 
-                        if (res.ok || res.status === 201 || res.status === 200) {
+                        if (res.ok) {
                             item.sincronizado = true;
                             store.put(item);
                             enviados++;
                         } else {
-                            console.error("Error devuelto por Kobo:", res.status, await res.text());
+                            console.error("Error devuelto por el servidor:", res.status);
                         }
                     } catch (e) {
                         console.error("Error de red al sincronizar:", e);
