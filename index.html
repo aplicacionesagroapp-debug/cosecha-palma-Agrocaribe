@@ -52,7 +52,6 @@
     <script>eruda.init();</script>
 
     <script>
-        // PEGA AQUÍ LA URL GENERADA EN GOOGLE APPS SCRIPT
         const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw8WxSY4RhCrvts6yNzYnfq2HMFkv9-8ZDjbR7xz0VxAngVTotD1781cEsdRM_PJCs/exec";
 
         let db;
@@ -97,9 +96,10 @@
             }
         }
 
-        // 2. Captura de GPS y Guardado Local
+        // 2. Captura de GPS, Fecha/Hora y Guardado Local
         function capturarUbicacionYGuardar(idCortero) {
             const options = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
+            const fechaHoraActual = new Date().toISOString(); // Captura Fecha y Hora local exacta
 
             navigator.geolocation.getCurrentPosition(
                 pos => {
@@ -108,7 +108,8 @@
                         latitud: pos.coords.latitude,
                         longitud: pos.coords.longitude,
                         cantidad: 1,
-                        timestamp: new Date().toISOString(),
+                        fecha_hora: fechaHoraActual,
+                        timestamp: fechaHoraActual,
                         sincronizado: false
                     };
                     guardarEnBDLocal(registro);
@@ -120,7 +121,8 @@
                         latitud: null,
                         longitud: null,
                         cantidad: 1,
-                        timestamp: new Date().toISOString(),
+                        fecha_hora: fechaHoraActual,
+                        timestamp: fechaHoraActual,
                         sincronizado: false
                     };
                     guardarEnBDLocal(registro);
@@ -167,7 +169,7 @@
             };
         }
 
-        // 4. Sincronización a través de Google Apps Script (Transacción Corregida)
+        // 4. Sincronización a través de Google Apps Script
         async function sincronizarConKobo() {
             const txRead = db.transaction("registros", "readonly");
             const storeRead = txRead.objectStore("registros");
@@ -187,7 +189,8 @@
                         "submission": {
                             "ID_CORTERO": item.id_cortero,
                             "UBICACI_N_GPS_AUTOMATICA": item.latitud && item.longitud ? `${item.latitud} ${item.longitud} 0 0` : null,
-                            "CONTADOR_DE_RACIMOS": item.cantidad
+                            "CONTADOR_DE_RACIMOS": item.cantidad,
+                            "FECHA_HORA": item.fecha_hora || item.timestamp
                         }
                     };
 
@@ -201,7 +204,6 @@
                         });
 
                         if (res.ok) {
-                            // Abrimos una transacción nueva y dedicada exclusivamente para actualizar este registro
                             const txWrite = db.transaction("registros", "readwrite");
                             const storeWrite = txWrite.objectStore("registros");
                             item.sincronizado = true;
